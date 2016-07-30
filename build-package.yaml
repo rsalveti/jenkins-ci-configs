@@ -1,0 +1,113 @@
+- job:
+    name: build-package
+    description: Job for building debian packages
+    project-type: matrix
+    defaults: global
+    logrotate:
+        daysToKeep: 30
+        numToKeep: 30
+    properties:
+        - authorization:
+            authenticated:
+                - job-read
+                - job-extended-read
+                - job-build
+                - job-cancel
+        - least-load:
+            disabled: False
+    parameters:
+        - string:
+            name: codename
+            default: 'xenial'
+            description: 'distribution codename targeted: all, xenial or jessie'
+        - string:
+            name: source
+            description: 'dsc source url or filename'
+    axes:
+        - axis:
+            type: slave
+            name: label
+            values:
+                - docker-xenial-amd64
+                - docker-jessie-amd64
+    execution-strategy:
+        sequential: false
+    disabled: false
+    display-name: 'Build debian package'
+    wrappers:
+        - timestamps
+        - build-name:
+            name: '#${BUILD_NUMBER}-${ENV,var="codename"}: ${ENV,var="source"}'
+        - matrix-tie-parent:
+            node: master
+    builders:
+        - shell: |
+            #!/bin/bash
+
+            set -ex
+
+            export CCACHE_DIR=/home/dev/ccache
+
+            arch=`dpkg-architecture -qDEB_HOST_ARCH`
+            dist=`lsb_release -sc`
+            if [ "$codename" != "all" ] && [ "$dist" != "$codename" ]; then
+                echo "$codename requested while we are $dist, skip"
+                exit 0
+            fi
+
+            # amd64 is the must build target with source uploads for all dists
+            if [ $arch = amd64 ]
+            then
+                buildpackage_params="-uc -us -sa"
+            else
+                buildpackage_params="-uc -us -B"
+            fi
+
+            echo "arch: $arch"
+            echo "dist: $dist"
+            echo "source: $source"
+
+            # build a source repo for apt-get build-dep
+            sudo rm -f *.changes repo work /etc/apt/sources.list.d/local.list
+            mkdir repo && cd repo
+            dget -q -d -u $source
+            dpkg-scansources . /dev/null > Sources.gz
+            echo "deb-src file:$(pwd) /" > local.list
+            sudo cp local.list /etc/apt/sources.list.d/
+            cd ..
+
+            localdsc=`echo $source|sed -e "s,.*/,$(pwd)/repo/,"`
+            sourcename=`basename ${localdsc}|sed -e 's,_.*,,'`
+
+            dpkg-source -x ${localdsc} work/
+
+            # Verify entries
+            cd work
+            dpkg-parsechangelog
+
+            export DEBIAN_FRONTEND=noninteractive
+            echo exit 101 | sudo tee /usr/sbin/policy-rc.d
+            sudo chmod +x /usr/sbin/policy-rc.d
+
+            sudo apt-get update -qq||true
+            sudo apt-get dist-upgrade -y -q||true
+            sudo apt-get build-dep -q --no-install-recommends -y ${sourcename}
+
+            debuild --preserve-envvar=CCACHE_DIR --prepend-path=/usr/lib/ccache \
+                -rfakeroot -j`getconf _NPROCESSORS_ONLN` $buildpackage_params
+            cd ..
+
+            ls -l .
+            change=`echo *changes`
+            if [ ! -r $change ]
+            then
+                echo "no changes file"
+                exit 1
+            else
+                cat $change
+            fi
+    publishers:
+        - archive:
+            artifacts: '*.changes, *.dsc, *.gz, *.bz2, *.xz, *.deb, *.udeb'
+            allow-empty: 'true'
+            only-if-success: true
