@@ -1,0 +1,103 @@
+- job:
+    name: zephyr
+    project-type: matrix
+    defaults: global
+    properties:
+        - authorization:
+            authenticated:
+                - job-read
+                - job-extended-read
+                - job-build
+                - job-cancel
+    disabled: false
+    node: master
+    display-name: 'Zephyr project'
+    axes:
+        - axis:
+            type: slave
+            name: label
+            values:
+                - docker-xenial-amd64
+        - axis:
+            type: user-defined
+            name: PLATFORM
+            values:
+                - qemu_cortex_m3
+                - nrf52_pca10040
+                - nrf52_nitrogen
+    parameters:
+        - string:
+            name: ZEPHYR_GIT_ADDR
+            default: 'https://gerrit.zephyrproject.org/r/zephyr'
+        - string:
+            name: ZEPHYR_GIT_VERSION
+            default: 'HEAD'
+    execution-strategy:
+        sequential: false
+    wrappers:
+        - timestamps
+        - build-name:
+            name: '#${BUILD_NUMBER}-${ENV,var="ZEPHYR_GIT_VERSION"} ${ENV,var="PLATFORM"}'
+        - matrix-tie-parent:
+            node: master
+    builders:
+        - shell: |
+            #!/bin/bash
+
+            set -ex
+
+            rm -rf build
+
+            # Install base dependencies
+            sudo apt-get -q=2 update
+            sudo apt-get -q=2 -y install git g++ libc6-dev-i386 g++-multilib python3-ply gcc-arm-embedded python-pycurl rsync
+
+            # Cross toolchain (provided by the ARM PPA, installed at the normal path)
+            export GCCARMEMB_TOOLCHAIN_PATH=/usr
+            export ZEPHYR_GCC_VARIANT=gccarmemb
+
+            # Clone and set zephyr's workspace
+            git clone $ZEPHYR_GIT_ADDR --reference /home/dev/zephyr.git zephyr
+            cd zephyr; git checkout -b build-baseline $ZEPHYR_GIT_VERSION
+            ZEPHYR_GIT_VERSION=$(git log --format="%h" -1)
+
+            # Set build environment variables
+            LANG=C
+            ZEPHYR_BASE=${WORKSPACE}/zephyr
+            PATH=${ZEPHYR_BASE}/scripts:${PATH}
+            BUILDDIR=build
+            export LANG ZEPHYR_BASE PATH
+            ## ccache
+            CCACHE_DIR=/home/dev/ccache
+            CCACHE_SLOPPINESS=file_macro,include_file_mtime,time_macros
+            USE_CCACHE=1
+            export CCACHE_DIR CCACHE_SLOPPINESS USE_CCACHE
+
+            sanitycheck \
+              --platform ${PLATFORM} \
+              --inline-logs \
+              --build-only \
+              --enable-slow \
+              --outdir ${BUILDDIR}
+
+            find ${BUILDDIR} -type f -name '.config' -exec rename 's/.config/zephyr.config/' {} +
+
+            OUTDIR=${WORKSPACE}/${BUILD_NUMBER}-${ZEPHYR_GIT_VERSION}
+            mkdir -p ${OUTDIR}
+
+            rsync -amq \
+              --include=zephyr.bin \
+              --include=zephyr.config \
+              --include=build.log \
+              --include='*/' \
+              --exclude='*' \
+              ${BUILDDIR}/* ${OUTDIR}
+    publishers:
+        - archive:
+            artifacts: 'zephyr/scripts/sanity_chk/last_sanity.csv'
+        - scp:
+            site: 'domobox.dynv6.net'
+            files:
+                - target: 'zephyr'
+                  source: '${BUILD_NUMBER}-*/**'
+                  keep-hierarchy: true
