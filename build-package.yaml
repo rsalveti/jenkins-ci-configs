@@ -29,6 +29,7 @@
             name: label
             values:
                 - docker-xenial-amd64
+                - docker-xenial-arm64
                 - docker-jessie-amd64
     execution-strategy:
         sequential: false
