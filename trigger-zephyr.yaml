@@ -1,0 +1,44 @@
+- job:
+    name: trigger-zephyr
+    project-type: freestyle
+    defaults: global
+    properties:
+        - authorization:
+            authenticated:
+                - job-read
+                - job-extended-read
+                - job-build
+                - job-cancel
+    disabled: false
+    node: master
+    display-name: 'Trigger for the Zephyr CI job'
+    scm:
+        - git:
+            url: https://gerrit.zephyrproject.org/r/zephyr
+            refspec: +refs/heads/master:refs/remotes/origin/master
+            name: origin
+            branches:
+                - refs/heads/master
+            shallow-clone: true
+            wipe-workspace: false
+            fastpoll: true
+    triggers:
+        - pollscm:
+            cron: "H/5 * * * *"
+            ignore-post-commit-hooks: true
+    wrappers:
+        - timestamps
+        - build-name:
+            name: '#${BUILD_NUMBER}-${GIT_REVISION,length=8}'
+    builders:
+        - shell: |
+            #!/bin/bash
+            cat > build-zephyr-params << EOF
+            ZEPHYR_GIT_ADDR=${GIT_URL}
+            ZEPHYR_GIT_VERSION=${GIT_COMMIT:0:8}
+            EOF
+    publishers:
+      - trigger-parameterized-builds:
+          - project: zephyr
+            property-file: build-zephyr-params
+            condition: SUCCESS
