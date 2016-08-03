@@ -1,0 +1,70 @@
+- job:
+    name: zephyr-lava
+    project-type: matrix
+    defaults: global
+    properties:
+        - authorization:
+            authenticated:
+                - job-read
+                - job-extended-read
+                - job-build
+                - job-cancel
+    disabled: false
+    node: master
+    display-name: 'LAVA testing for the Zephyr project'
+    axes:
+        - axis:
+            type: slave
+            name: label
+            values:
+                - docker-xenial-amd64
+        - axis:
+            type: user-defined
+            name: PLATFORM
+            values:
+                - qemu_cortex_m3
+    parameters:
+        - string:
+            name: ZEPHYR_BUILD_ID
+    execution-strategy:
+        sequential: false
+    wrappers:
+        - timestamps
+        - build-name:
+            name: '#${BUILD_NUMBER}-${ENV,var="ZEPHYR_BUILD_ID"} ${ENV,var="PLATFORM"}'
+        - matrix-tie-parent:
+            node: master
+    builders:
+        - shell: |
+            #!/bin/bash
+
+            set -ex
+
+            # Install base dependencies
+            sudo apt-get -q=2 update
+            sudo apt-get -q=2 -y install git python2.7
+
+            git clone --depth 1 https://github.com/rsalveti/jenkins-ci-configs.git
+
+            SNAPSHOTS_URL=http://domobox/snapshots/jenkins/zephyr
+            LAVA_SERVER=evasys:8000
+
+            wget ${SNAPSHOTS_URL}/${ZEPHYR_BUILD_ID}/${PLATFORM}/test-cases.txt
+
+            # TODO:
+            # - Improve the job to submit several jobs but watch them in parallel
+            # - Decide when to fail
+            # - Make it use ipv6 (docker/lava)
+
+            cat test-cases.txt | while read TEST; do
+              TESTNAME=`echo $TEST | sed -e "s/\/zephyr.bin//" -e "s/\/test$//" -e "s|/|-|g"`
+              TESTURL=${SNAPSHOTS_URL}/${ZEPHYR_BUILD_ID}/${PLATFORM}/${TEST}
+              JOBNAME=${PLATFORM}-zephyr-${TESTNAME}
+              cp jenkins-ci-configs/lava-templates/${PLATFORM}.yaml ${PLATFORM}-${TESTNAME}.yaml
+              sed -i "s|CIJOBNAME|${JOBNAME}|g" ${PLATFORM}-${TESTNAME}.yaml
+              sed -i "s|CITESTURL|${TESTURL}|g" ${PLATFORM}-${TESTNAME}.yaml
+              sed -i "s|CITESTNAME|${TESTNAME}|g" ${PLATFORM}-${TESTNAME}.yaml
+
+              # Submit the job and wait
+              ./jenkins-ci-configs/scripts/lava-submityaml.py -k /home/dev/zephyr/apikey.txt -p -s ${LAVA_SERVER} ${PLATFORM}-${TESTNAME}.yaml
+            done
