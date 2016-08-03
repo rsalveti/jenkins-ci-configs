@@ -1,0 +1,32 @@
+# Zephyr JOB definition for QEMU
+device_type: qemu-cortex-m3
+job_name: CIJOBNAME
+
+timeouts:
+  job:
+    minutes: 8
+  action:
+    minutes: 4
+priority: medium
+visibility: public
+
+actions:
+- deploy:
+    timeout:
+      minutes: 1
+    to: tmpfs
+    type: monitor
+    images:
+        kernel:
+          image_arg: -kernel {kernel}
+          url: CITESTURL
+- boot:
+    method: monitor
+    timeout:
+      minutes: 4
+- test:
+    monitor:
+      name: CITESTNAME
+      start: tc_start
+      end: PROJECT EXECUTION SUCCESSFUL
+      pattern: (?P<result>(PASS|FAIL))\s-\s(?P<test_case_id>\w+)
