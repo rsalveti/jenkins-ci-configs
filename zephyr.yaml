@@ -83,7 +83,7 @@
             find ${BUILDDIR} -type f -name '.config' -exec rename 's/.config/zephyr.config/' {} +
 
             OUTDIR=${WORKSPACE}/${BUILD_NUMBER}-${ZEPHYR_GIT_VERSION}
-            mkdir -p ${OUTDIR}
+            mkdir -p ${OUTDIR}/${PLATFORM}
 
             rsync -amq \
               --include=zephyr.bin \
@@ -92,6 +92,12 @@
               --include='*/' \
               --exclude='*' \
               ${BUILDDIR}/* ${OUTDIR}
+
+            # HACK: Create list of tests to run with LAVA
+            find ${BUILDDIR}/${PLATFORM} -name zephyr.lst -printf '%P\n' | sort | while read lst; do \
+              grep -q -m1 TC_END_REPORT ${BUILDDIR}/${PLATFORM}/$lst && echo ${lst/%zephyr.lst/zephyr.bin}; \
+              done > ${OUTDIR}/${PLATFORM}/test-cases.txt
+
     publishers:
         - archive:
             artifacts: 'zephyr/scripts/sanity_chk/last_sanity.csv'
